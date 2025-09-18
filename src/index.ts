@@ -31,7 +31,7 @@ interface IMessage {
   userAddress: string
   message: string
   profile_image: string
-  timestamp: string
+  timestamp: Date
   messageType: string
   expiresAt: number
 }
@@ -47,6 +47,7 @@ interface PumpChatClientOptions {
   roomId: string
   username?: string
   messageHistoryLimit?: number
+  token?: string
 }
 
 /**
@@ -107,11 +108,17 @@ export class PumpChatClient extends EventEmitter {
   /** Interval timer for sending ping messages to keep connection alive */
   private pingInterval: NodeJS.Timeout | null = null
   
+  /** Heartbeat watchdog to proactively reconnect on missed pongs */
+  private heartbeatMonitor: NodeJS.Timeout | null = null
+  
+  /** Timestamp of the last pong observed from the server */
+  private lastPongAt: number = 0
+  
   /** Counter for reconnection attempts */
   private reconnectAttempts: number = 0
   
   /** Maximum number of times to attempt reconnection before giving up */
-  private maxReconnectAttempts: number = 5
+  private maxReconnectAttempts: number = Infinity
   
   /** 
    * Current acknowledgment ID for socket.io protocol.
@@ -124,6 +131,9 @@ export class PumpChatClient extends EventEmitter {
    * Key is the ack ID, value contains the event name and timestamp.
    */
   private pendingAcks: Map<number, { event: string, timestamp: number }> = new Map()
+
+  /** Optional auth token used for authentication with pump.fun */
+  private token: string | null = null
 
   /**
    * Creates a new PumpChatClient instance.
@@ -140,6 +150,7 @@ export class PumpChatClient extends EventEmitter {
     this.roomId = options.roomId
     this.username = options.username || "anonymous"
     this.messageHistoryLimit = options.messageHistoryLimit || 100
+    this.token = options.token || null
     
     // Initialize WebSocket client
     this.client = new WebSocket.client()
@@ -213,8 +224,8 @@ export class PumpChatClient extends EventEmitter {
      * Handle connection closure.
      * This can happen due to network issues, server shutdown, or explicit disconnection.
      */
-    connection.on("close", () => {
-      console.error("WebSocket Connection Closed")
+    connection.on("close", (code?: number, description?: string) => {
+      console.error("WebSocket Connection Closed", code, description)
       
       // Update connection state
       this.isConnected = false
@@ -225,6 +236,10 @@ export class PumpChatClient extends EventEmitter {
       
       // Stop sending ping messages
       this.stopPing()
+      // Stop heartbeat
+      this.stopHeartbeat()
+      // Stop ack cleanup timer
+      this.stopAckCleanup()
       
       // Attempt to reconnect unless explicitly disconnected
       this.attemptReconnect()
@@ -245,9 +260,11 @@ export class PumpChatClient extends EventEmitter {
      * Set up periodic cleanup of stale acknowledgments.
      * This prevents memory leaks from acknowledgments that never receive responses.
      */
-    setInterval(() => {
-      this.cleanupStaleAcks()
-    }, 10000) // Run cleanup every 10 seconds
+    if (!this.ackCleanupInterval) {
+      this.ackCleanupInterval = setInterval(() => {
+        this.cleanupStaleAcks()
+      }, 10000) // Run cleanup every 10 seconds
+    }
   }
 
   /**
@@ -295,10 +312,12 @@ export class PumpChatClient extends EventEmitter {
         
       case "2": // Ping from server - Keep-alive mechanism
         this.sendPong()
+        this.lastPongAt = Date.now()
         break
         
       case "3": // Pong from server - Response to our ping
-        // No action needed, connection is alive
+        // Update heartbeat timestamp
+        this.lastPongAt = Date.now()
         break
         
       default:
@@ -323,9 +342,14 @@ export class PumpChatClient extends EventEmitter {
       this.startPing(connectData.pingInterval)
     }
 
-    // Send socket.io handshake with origin and timestamp
+    // Send socket.io handshake with origin and timestamp and optional token
     // The "40" prefix indicates this is a handshake message
-    this.send(`40{"origin":"https://pump.fun","timestamp":${Date.now()},"token":null}`)
+    const payload = {
+      origin: "https://pump.fun",
+      timestamp: Date.now(),
+      token: this.token,
+    }
+    this.send(`40${JSON.stringify(payload)}`)
   }
 
   /**
@@ -377,6 +401,10 @@ export class PumpChatClient extends EventEmitter {
           // A user left the chat room
           this.emit("userLeft", payload)
           break
+
+        case "messageDeleted":
+          // A message was deleted
+          break
           
         default:
           console.error(`Unknown event: ${eventName}`)
@@ -401,15 +429,15 @@ export class PumpChatClient extends EventEmitter {
       // Handle different response formats for message history
       if (eventData && eventData.messages) {
         // Response includes a messages array in an object
-        this.messageHistory = eventData.messages
+        this.messageHistory = this.sortMessagesChronologically(eventData.messages).slice(-this.messageHistoryLimit)
         this.emit("messageHistory", this.messageHistory)
       } else if (Array.isArray(eventData)) {
         // Response is directly an array of messages
-        this.messageHistory = eventData
+        this.messageHistory = this.sortMessagesChronologically(eventData).slice(-this.messageHistoryLimit)
         this.emit("messageHistory", this.messageHistory)
       } else if (Array.isArray(ackData) && ackData.length > 0) {
         // Response is wrapped in another array
-        this.messageHistory = ackData[0]
+        this.messageHistory = this.sortMessagesChronologically(ackData[0]).slice(-this.messageHistoryLimit)
         this.emit("messageHistory", this.messageHistory)
       }
     } catch (error) {
@@ -449,11 +477,22 @@ export class PumpChatClient extends EventEmitter {
         // Successfully joined the room, now request message history
         this.requestMessageHistory()
       } else if (pendingAck?.event === "getMessageHistory") {
-        // Received message history
-        const messages = ackData[0]
-        if (Array.isArray(messages)) {
-          this.messageHistory = messages
+        // Received message history - support multiple response shapes
+        const payload = ackData[0]
+        if (Array.isArray(payload)) {
+          this.messageHistory = this.sortMessagesChronologically(payload).slice(-this.messageHistoryLimit)
           this.emit("messageHistory", this.messageHistory)
+        } else if (payload && Array.isArray(payload.messages)) {
+          this.messageHistory = this.sortMessagesChronologically(payload.messages).slice(-this.messageHistoryLimit)
+          this.emit("messageHistory", this.messageHistory)
+        } else {
+          // Fallback log to help diagnose unexpected formats
+          try {
+            console.error(
+              "Unexpected getMessageHistory ack shape:",
+              JSON.stringify(ackData).slice(0, 500)
+            )
+          } catch {}
         }
       } else if (pendingAck?.event === "sendMessage") {
         // Handle send message response (usually errors)
@@ -473,9 +512,10 @@ export class PumpChatClient extends EventEmitter {
    * @param {IMessage} message - The new message object
    * @private
    */
-  private handleNewMessage(message: IMessage) {
+  private handleNewMessage(message: any) {
+    const normalized = this.normalizeMessage(message)
     // Add to message history
-    this.messageHistory.push(message)
+    this.messageHistory.push(normalized)
     
     // Maintain message history limit by removing oldest messages
     if (this.messageHistory.length > this.messageHistoryLimit) {
@@ -483,7 +523,7 @@ export class PumpChatClient extends EventEmitter {
     }
     
     // Emit event for consumers
-    this.emit("message", message)
+    this.emit("message", normalized)
   }
 
   /**
@@ -538,13 +578,10 @@ export class PumpChatClient extends EventEmitter {
    * @private
    */
   private startPing(interval: number) {
-    // Clear any existing ping interval
+    // We no longer send client-initiated pings for Engine.IO v4.
+    // Just ensure heartbeat monitoring is enabled based on server interval.
     this.stopPing()
-    
-    // Set up new ping interval
-    this.pingInterval = setInterval(() => {
-      this.send("2") // "2" is the ping message in socket.io
-    }, interval)
+    this.startHeartbeat(Math.max(interval * 2, interval + 5000))
   }
 
   /**
@@ -556,6 +593,36 @@ export class PumpChatClient extends EventEmitter {
     if (this.pingInterval) {
       clearInterval(this.pingInterval)
       this.pingInterval = null
+    }
+  }
+
+  /**
+   * Starts a heartbeat watchdog that monitors last pong time
+   * and triggers a reconnect if the server stops responding.
+   * @param {number} timeout - Milliseconds allowed between pongs
+   * @private
+   */
+  private startHeartbeat(timeout: number) {
+    this.stopHeartbeat()
+    this.lastPongAt = Date.now()
+    this.heartbeatMonitor = setInterval(() => {
+      const now = Date.now()
+      if (now - this.lastPongAt > timeout) {
+        console.error("Heartbeat missed. Reconnecting...")
+        try {
+          this.connection?.close()
+        } catch {}
+        this.isConnected = false
+        this.attemptReconnect()
+      }
+    }, Math.min(timeout, 15000))
+  }
+
+  /** Stops the heartbeat watchdog */
+  private stopHeartbeat() {
+    if (this.heartbeatMonitor) {
+      clearInterval(this.heartbeatMonitor)
+      this.heartbeatMonitor = null
     }
   }
 
@@ -606,7 +673,7 @@ export class PumpChatClient extends EventEmitter {
    */
   public connect() {
     // Headers required for successful WebSocket connection to pump.fun
-    const headers = {
+    const headers: { [key: string]: string } = {
       // Standard WebSocket headers
       "Host": "livechat.pump.fun",
       "Connection": "Upgrade",
@@ -625,6 +692,10 @@ export class PumpChatClient extends EventEmitter {
       "Accept-Encoding": "gzip, deflate, br, zstd",
       "Accept-Language": "en-US,en;q=0.9",
       "Sec-WebSocket-Extensions": "permessage-deflate; client_max_window_bits"
+    }
+
+    if (this.token) {
+      headers["auth-token"] = this.token
     }
 
     // Initiate WebSocket connection
@@ -725,6 +796,115 @@ export class PumpChatClient extends EventEmitter {
   }
 
   /**
+   * Deletes a message via pump.fun moderation HTTP endpoint.
+   * Requires a valid token to be provided when constructing the client.
+   * Also removes the message from local history and re-emits 'messageHistory'.
+   * @param {string} messageId - The message id to delete
+   * @param {string} [reason="TOXIC"] - Reason for deletion sent to the server
+   * @returns {Promise<{ ok: boolean, status: number, body?: unknown }>}
+   * @public
+   */
+  public async deleteMessage(
+    msg: IMessage,
+    reason: string = "TOXIC"
+  ): Promise<{ ok: boolean; status: number; body?: unknown }> {
+    if (!this.token) {
+      throw new Error("deleteMessage requires an auth token. Provide 'token' when creating PumpChatClient.")
+    }
+
+    const iso = msg.timestamp instanceof Date ? msg.timestamp.getTime() : String(msg.timestamp)
+    let timestamp = msg.timestamp ? iso : null != msg.id ? msg.id : '';
+
+    const url = `https://livechat.pump.fun/chat/moderation/rooms/${encodeURIComponent(
+      this.roomId
+    )}/messages/${encodeURIComponent(timestamp)}/delete`
+    const headers: { [key: string]: string } = {
+      "Content-Type": "application/json",
+      "Accept": "application/json, text/plain, */*",
+      "Origin": "https://pump.fun",
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
+    }
+
+    // Include token in both common forms used by the service
+    headers["Cookie"] = `auth-token=${this.token}`
+    headers["auth-token"] = `${this.token}`
+    headers["Authorization"] = `Bearer ${this.token}`
+
+    const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+    const maxRetries = 5
+    let attempt = 0
+    let response: Response | null = null
+    let responseBody: unknown = undefined
+
+    while (attempt <= maxRetries) {
+      try {
+        response = await fetch(url, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ reason }),
+        })
+
+        if (response.status === 429) {
+          // Respect Retry-After if present; otherwise exponential backoff with jitter
+          const ra = response.headers.get("retry-after") || response.headers.get("Retry-After")
+          let waitMs = 0
+          if (ra) {
+            const asNumber = Number(ra)
+            if (!Number.isNaN(asNumber)) {
+              waitMs = Math.max(0, asNumber * 1000)
+            } else {
+              const dateMs = Date.parse(ra)
+              if (!Number.isNaN(dateMs)) {
+                waitMs = Math.max(0, dateMs - Date.now())
+              }
+            }
+          }
+          if (!waitMs) {
+            const base = 500 * Math.pow(2, attempt)
+            const jitter = Math.floor(Math.random() * 250)
+            waitMs = Math.min(30000, base + jitter)
+          }
+          attempt++
+          await sleep(waitMs)
+          continue
+        }
+
+        // Parse body if possible (may be empty)
+        try {
+          responseBody = await response.json()
+        } catch {}
+
+        if (!response.ok) {
+          this.emit("serverError", responseBody || { status: response.status })
+          return { ok: false, status: response.status, body: responseBody }
+        }
+
+        // Success path
+        break
+      } catch (err) {
+        // Network/transport error - retry with backoff
+        if (attempt >= maxRetries) {
+          this.emit("error", err)
+          return { ok: false, status: 0, body: undefined }
+        }
+        const backoff = Math.min(30000, 500 * Math.pow(2, attempt))
+        attempt++
+        await sleep(backoff)
+      }
+    }
+
+    // Remove from local history if present
+    const beforeLength = this.messageHistory.length
+    this.messageHistory = this.messageHistory.filter((m) => m.id !== msg.id)
+    if (this.messageHistory.length !== beforeLength) {
+      // this.emit("messageHistory", this.messageHistory)
+    }
+
+    return { ok: true, status: (response as Response).status, body: responseBody }
+  }
+
+  /**
    * Gets the next acknowledgment ID for socket.io protocol.
    * IDs cycle from 0 to 9 to match requests with responses.
    * @returns {number} The next acknowledgment ID (0-9)
@@ -753,6 +933,49 @@ export class PumpChatClient extends EventEmitter {
         this.pendingAcks.delete(id)
         console.error(`Cleaned up stale ack ${id} for ${ack.event}`)
       }
+    }
+  }
+
+  // Dedicated interval reference so we can clear it on disconnect
+  private ackCleanupInterval: NodeJS.Timeout | null = null
+
+  private stopAckCleanup() {
+    if (this.ackCleanupInterval) {
+      clearInterval(this.ackCleanupInterval)
+      this.ackCleanupInterval = null
+    }
+  }
+
+  /**
+   * Sorts messages in chronological order (oldest to newest) by timestamp
+   * @param {IMessage[]} messages - Array of messages to sort
+   * @returns {IMessage[]} Sorted messages array
+   * @private
+   */
+  private sortMessagesChronologically(messages: any[]): IMessage[] {
+    return [...messages].map(this.normalizeMessage).sort((a, b) => {
+      const at = a.timestamp.getTime()
+      const bt = b.timestamp.getTime()
+      return at - bt
+    })
+  }
+
+  /**
+   * Normalizes raw message objects from server to IMessage with Date timestamp
+   */
+  private normalizeMessage(message: any): IMessage {
+    const ts = message.timestamp
+    const parsed = ts instanceof Date ? ts : new Date(ts)
+    return {
+      id: message.id,
+      roomId: message.roomId,
+      username: message.username,
+      userAddress: message.userAddress,
+      message: message.message,
+      profile_image: message.profile_image,
+      timestamp: parsed,
+      messageType: message.messageType,
+      expiresAt: message.expiresAt,
     }
   }
 

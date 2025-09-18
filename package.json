@@ -6,7 +6,8 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc",
-    "prepare": "npm run build"
+    "prepare": "npm run build",
+    "start": "npm run build && node dist/run.js"
   },
   "keywords": [
     "pump.fun",

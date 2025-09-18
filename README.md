@@ -1,119 +1,211 @@
-# pump-chat-client
+## Pump Helper (Open Source)
 
-A WebSocket client library for connecting to pump.fun token chat rooms. This library handles the socket.io protocol communication and provides an easy-to-use interface for reading chat messages.
+An open-source version of PumpHelper you can run yourself. It connects to pump.fun live chat over WebSocket (socket.io/Engine.IO v4), fetches message history, and includes optional moderation helpers (exact-word blacklist, per-user 5s cooldown, message delete).
 
-## Installation
+### Highlights
 
-```bash
-npm install pump-chat-client
+- Automatic reconnection with heartbeat watchdog
+- Socket.io framing with ack tracking (Engine.IO v4)
+- Chronological message history with configurable limits
+- Optional moderation helpers (CLI): exact-word blacklist, per-user cooldown
+- HTTP moderation delete with 429-aware retries
+- TypeScript with strong types (timestamps are Date)
+
+---
+
+## Run it yourself (CLI)
+
+Windows PowerShell (recommended on Windows):
+
+```powershell
+# In the project directory
+npm install
+
+# Set your room and token, then start
+$env:PUMP_ROOM_ID="<ROOM_ID>"; $env:PUMP_TOKEN="<JWT>"; npm start
+
+# Optional extras
+# - Set history limit (default 100)
+$env:PUMP_HISTORY_LIMIT="200"
+# - Exact-word blacklist (comma-separated). Case-insensitive, word-boundary matched
+$env:PUMP_BLACKLIST="word1,word2,word3"
+# - Throttle auto-send if you enable it in src/run.ts (default 60000 ms)
+$env:PUMP_SEND_INTERVAL_MS="60000"
+
+npm start
 ```
 
-## Usage
+Generic shells (bash/zsh):
+
+```bash
+npm install
+PUMP_ROOM_ID="<ROOM_ID>" PUMP_TOKEN="<JWT>" \
+PUMP_HISTORY_LIMIT=200 PUMP_BLACKLIST="word1,word2" \
+PUMP_SEND_INTERVAL_MS=60000 npm start
+```
+
+Or pass flags directly:
+
+```bash
+npm start -- \
+  --room <ROOM_ID> \
+  --token <JWT> \
+  [--username <NAME>] \
+  [--limit <N>] \
+  [--send-interval <MS>] \
+  [--blacklist word1,word2]
+```
+
+Flags and environment variables:
+
+- `--room`, `-r` (required) / `PUMP_ROOM_ID`
+- `--username`, `-u` / `PUMP_USERNAME`
+- `--token`, `-t` / `PUMP_TOKEN` (JWT; required for sending/deleting)
+- `--limit`, `-l` / `PUMP_HISTORY_LIMIT` (default 100)
+- `--send-interval`, `-s` / `PUMP_SEND_INTERVAL_MS` (throttle auto-send; default 60000)
+- `--blacklist`, `-b` / `PUMP_BLACKLIST` (comma-separated words; exact word match, case-insensitive)
+
+What the CLI does by default:
+
+- Connects to `wss://livechat.pump.fun/socket.io/?EIO=4&transport=websocket`
+- Prints connection lifecycle events
+- Requests and emits message history (sorted oldest → newest)
+- If blacklist provided, deletes messages containing any exact blacklisted word
+- Enforces a per-user 5s cooldown: if a user posts within 5s of their last allowed message, the message is deleted
+
+Note: automatic send is commented out by default in `src/run.ts` to avoid rate limits. You can enable it locally if needed.
+
+---
+
+## Library usage (programmatic)
 
 ```typescript
-import { PumpChatClient } from 'pump-chat-client';
+import { PumpChatClient, IMessage } from 'pump-chat-client'
 
-// Create a new client instance
 const client = new PumpChatClient({
   roomId: 'YOUR_TOKEN_ADDRESS',
   username: 'your-username',
-  messageHistoryLimit: 100
-});
+  messageHistoryLimit: 100,
+  token: process.env.PUMP_TOKEN, // optional but required for send/delete
+})
 
-// Set up event listeners
 client.on('connected', () => {
-  console.log('Connected to pump.fun chat!');
-});
+  console.log('Connected to pump.fun chat!')
+})
 
-client.on('message', (message) => {
-  console.log(`${message.username}: ${message.message}`);
-});
+client.on('messageHistory', (messages: IMessage[]) => {
+  console.log(`History (oldest→newest): ${messages.length} items`)
+})
 
-client.on('messageHistory', (messages) => {
-  console.log(`Received ${messages.length} historical messages`);
-});
+client.on('message', (message: IMessage) => {
+  // message.timestamp is a Date
+  console.log(`${message.timestamp.toISOString()} ${message.username}: ${message.message}`)
+})
 
-client.on('error', (error) => {
-  console.error('Chat error:', error);
-});
+client.on('error', (err) => console.error('Chat error:', err))
+client.on('serverError', (err) => console.error('Server error:', err))
+client.on('disconnected', () => console.log('Disconnected'))
 
-client.on('disconnected', () => {
-  console.log('Disconnected from chat');
-});
+client.connect()
 
-// Connect to the chat room
-client.connect();
+// Send a message (requires valid token)
+client.sendMessage('Hello everyone!')
 
-// Send a message (requires authentication)
-client.sendMessage('Hello everyone!');
+// Delete a message (requires valid token)
+// Note: deleteMessage accepts the full IMessage so it can build the correct URL
+async function moderate(msg: IMessage) {
+  const res = await client.deleteMessage(msg, 'TOXIC')
+  if (!res.ok) console.error('Delete failed:', res.status, res.body)
+}
 
-// Get stored messages
-const messages = client.getMessages(10); // Get last 10 messages
-const latestMessage = client.getLatestMessage();
+// Access buffered messages
+const last10 = client.getMessages(10)
+const latest = client.getLatestMessage()
 
 // Disconnect when done
-client.disconnect();
+client.disconnect()
 ```
 
-## Features
+---
 
-- **Automatic reconnection** with exponential backoff
-- **Socket.io protocol support** with acknowledgment tracking
-- **Message history** management with configurable limits
-- **Event-driven architecture** using EventEmitter
-- **TypeScript support** with full type definitions
+## API reference
 
-## API
+### PumpChatClient(options)
 
-### Constructor Options
+Options:
 
 ```typescript
 interface PumpChatClientOptions {
-  roomId: string;           // Token address/room ID
-  username?: string;        // Username (default: 'anonymous')
-  messageHistoryLimit?: number; // Max messages to store (default: 100)
+  roomId: string
+  username?: string
+  messageHistoryLimit?: number // default 100
+  token?: string // JWT used for Authorization and auth-token headers
 }
 ```
 
-### Events
+Events:
 
-- `connected` - Emitted when successfully connected
-- `message` - Emitted when a new message is received
-- `messageHistory` - Emitted when message history is received
-- `error` - Emitted on connection or protocol errors
-- `serverError` - Emitted on server-side errors
-- `disconnected` - Emitted when disconnected
-- `userLeft` - Emitted when a user leaves the chat
-- `maxReconnectAttemptsReached` - Emitted after max reconnection attempts
+- `connected`
+- `disconnected`
+- `message` (IMessage)
+- `messageHistory` (IMessage[])
+- `error` (Error)
+- `serverError` (unknown)
+- `userLeft`
+- `maxReconnectAttemptsReached`
 
-### Methods
+Methods:
 
-- `connect()` - Connect to the chat room
-- `disconnect()` - Disconnect from the chat room
-- `sendMessage(message: string)` - Send a message (requires authentication)
-- `getMessages(limit?: number)` - Get stored messages
-- `getLatestMessage()` - Get the most recent message
-- `isActive()` - Check if connected
+- `connect(): void`
+- `disconnect(): void`
+- `sendMessage(message: string): void` (requires token)
+- `deleteMessage(msg: IMessage, reason = 'TOXIC'): Promise<{ ok: boolean; status: number; body?: unknown }>`
+  - Retries on HTTP 429 using Retry-After or exponential backoff with jitter (up to 5 attempts)
+- `getMessages(limit?: number): IMessage[]`
+- `getLatestMessage(): IMessage | null`
+- `isActive(): boolean`
 
-## Message Interface
+Types:
 
 ```typescript
 interface IMessage {
-  id: string;
-  roomId: string;
-  username: string;
-  userAddress: string;
-  message: string;
-  profile_image: string;
-  timestamp: string;
-  messageType: string;
-  expiresAt: number;
+  id: string
+  roomId: string
+  username: string
+  userAddress: string
+  message: string
+  profile_image: string
+  timestamp: Date // normalized to Date
+  messageType: string
+  expiresAt: number
 }
 ```
 
-## Authentication
+---
 
-Note: Sending messages requires authentication with pump.fun. You need to be logged in to pump.fun in a browser and have valid session cookies. Reading messages works without authentication.
+## Moderation notes
+
+- Deleting or sending requires a valid pump.fun JWT token. Provide it via `token` in code, `--token` flag, or `PUMP_TOKEN` env.
+- The library sets both `Authorization: Bearer <token>` and `auth-token` headers and also includes the token in the initial socket handshake payload.
+- The CLI moderation helpers (blacklist and cooldown) are examples; adjust logic in `src/run.ts` to fit your needs.
+
+---
+
+## Development
+
+Build:
+
+```bash
+npm run build
+```
+
+Run CLI locally:
+
+```bash
+npm start -- --room <ROOM_ID> --token <JWT>
+```
+
+---
 
 ## License
 
