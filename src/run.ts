@@ -127,20 +127,6 @@ async function main() {
         console.log(`Connected to room ${roomId}`)
     })
 
-    client.on("messageHistory", async (messages) => {
-        console.log(`Received ${messages.length} historical messages`)
-
-        for (const msg of messages) {
-            // console.log(`[history] ${msg.timestamp} ${msg.username}: ${msg.message}`)
-            await client.deleteMessage(msg);
-        }
-    })
-
-    let lastSentAt = 0
-    const minInterval = Number.isFinite(sendIntervalMs || NaN)
-        ? (sendIntervalMs as number)
-        : 60000
-
     // Maintain per-user cooldown since the last allowed message (5s)
     type Recent = { lastAllowedAt: number; messages: { id: string; at: number }[] }
     const recentByUser: Map<string, Recent> = new Map()
