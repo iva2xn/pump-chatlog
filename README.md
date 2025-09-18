@@ -207,6 +207,11 @@ npm start -- --room <ROOM_ID> --token <JWT>
 
 ---
 
+## Credits
+
+Thanks to Jamie for his template on ws connection to pump.fun
+https://github.com/CodingButter
+
 ## License
 
 MIT
