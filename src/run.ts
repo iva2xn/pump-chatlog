@@ -7,6 +7,7 @@ type CliOptions = {
     token: string | null
     sendIntervalMs: number | null
     blacklist: string[] | null
+    cooldownSeconds: number | null
 }
 
 function printUsage(): void {
@@ -22,9 +23,10 @@ function printUsage(): void {
             "  -t, --token        Optional. JWT auth token for sending messages",
             "  -s, --send-interval Optional. Min ms between auto-sends (default: 60000)",
             "  -b, --blacklist    Optional. Comma-separated exact words to delete",
+            "  -c, --cooldown-seconds Optional. Per-user cooldown in seconds (0 disables)",
             "",
             "Env vars:",
-            "  PUMP_ROOM_ID, PUMP_USERNAME, PUMP_HISTORY_LIMIT, PUMP_TOKEN, PUMP_SEND_INTERVAL_MS, PUMP_BLACKLIST",
+            "  PUMP_ROOM_ID, PUMP_USERNAME, PUMP_HISTORY_LIMIT, PUMP_TOKEN, PUMP_SEND_INTERVAL_MS, PUMP_BLACKLIST, PUMP_COOLDOWN_SECONDS",
         ].join("\n")
     )
 }
@@ -42,6 +44,9 @@ function parseArgs(argv: string[]): CliOptions {
         : null
     let blacklist: string[] | null = process.env.PUMP_BLACKLIST
         ? process.env.PUMP_BLACKLIST.split(",").map((w) => w.trim()).filter(Boolean)
+        : null
+    let cooldownSeconds: number | null = process.env.PUMP_COOLDOWN_SECONDS
+        ? Number(process.env.PUMP_COOLDOWN_SECONDS)
         : null
 
     for (let i = 0; i < args.length; i++) {
@@ -82,6 +87,11 @@ function parseArgs(argv: string[]): CliOptions {
                 blacklist = (args[i + 1] || "").split(",").map((w) => w.trim()).filter(Boolean)
                 i++
                 break
+            case "--cooldown-seconds":
+            case "-c":
+                cooldownSeconds = Number(args[i + 1])
+                i++
+                break
             default:
                 // Support "key=value" style as well
                 if (arg.startsWith("room=") || arg.startsWith("-r=")) {
@@ -97,16 +107,18 @@ function parseArgs(argv: string[]): CliOptions {
                     sendIntervalMs = Number(arg.split("=")[1])
                 } else if (arg.startsWith("blacklist=") || arg.startsWith("-b=")) {
                     blacklist = (arg.split("=")[1] || "").split(",").map((w) => w.trim()).filter(Boolean)
+                } else if (arg.startsWith("cooldown-seconds=") || arg.startsWith("-c=")) {
+                    cooldownSeconds = Number(arg.split("=")[1])
                 }
                 break
         }
     }
 
-    return { roomId, username, messageHistoryLimit, token, sendIntervalMs, blacklist }
+    return { roomId, username, messageHistoryLimit, token, sendIntervalMs, blacklist, cooldownSeconds }
 }
 
 async function main() {
-    const { roomId, username, messageHistoryLimit, token, sendIntervalMs, blacklist } = parseArgs(
+    const { roomId, username, messageHistoryLimit, token, sendIntervalMs, blacklist, cooldownSeconds } = parseArgs(
         process.argv.slice(2)
     )
 
@@ -127,10 +139,10 @@ async function main() {
         console.log(`Connected to room ${roomId}`)
     })
 
-    // Maintain per-user cooldown since the last allowed message (5s)
+    // Maintain per-user cooldown since the last allowed message
     type Recent = { lastAllowedAt: number; messages: { id: string; at: number }[] }
     const recentByUser: Map<string, Recent> = new Map()
-    const cooldownMs = 5000
+    const cooldownMs = cooldownSeconds != null ? Math.max(0, Math.floor(cooldownSeconds * 1000)) : 5000
     const blacklistWords = (blacklist || []).map((w) => w.toLowerCase())
 
     const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
@@ -156,21 +168,23 @@ async function main() {
 
         const current: Recent = recentByUser.get(key) || { lastAllowedAt: 0, messages: [] }
 
-        // Prune entries older than cooldown window
-        current.messages = current.messages.filter((m) => now - m.at <= cooldownMs)
+        // Prune entries older than cooldown window (only if cooldown active)
+        if (cooldownMs > 0) {
+            current.messages = current.messages.filter((m) => now - m.at <= cooldownMs)
+        }
 
         // Time since last allowed message for this user
         const delta = current.lastAllowedAt ? now - current.lastAllowedAt : Number.POSITIVE_INFINITY
         // Record this message id and timestamp (for optional future use/inspection)
         current.messages.push({ id: msg.id, at: now })
 
-        if (delta <= cooldownMs) {
+        if (cooldownMs > 0 && delta <= cooldownMs) {
             // Within cooldown: delete the message
             await client.deleteMessage(msg)
             recentByUser.set(key, current)
         } else {
             // Outside cooldown: allow and update lastAllowedAt
-            current.lastAllowedAt = now
+            if (cooldownMs > 0) current.lastAllowedAt = now
             recentByUser.set(key, current)
         }
     })
