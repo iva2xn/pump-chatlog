@@ -14,5 +14,3 @@ export type BotStatus = {
 	roomId?: string
 	username?: string
 }
-
-

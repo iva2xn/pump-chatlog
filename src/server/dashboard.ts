@@ -59,12 +59,9 @@ export function createServer(port: number = 3000, providedBot?: PumpChatBot): Se
 			res.write(`: ping\n\n`)
 		}, 10000)
 
-        console.log('checking bot');
 		if (!bot) bot = new PumpChatBot(loadConfig())
-            console.log('bot found');
 		const unsubscribe = bot.subscribe((msg) => {
 			try {
-                console.log('subscribed');
 				res.write(`data: ${JSON.stringify({
 					id: msg.id,
 					username: msg.username,
@@ -91,10 +88,6 @@ export function createServer(port: number = 3000, providedBot?: PumpChatBot): Se
 	const distPublic = path.join(__dirname, "public")
 	const srcPublic = path.resolve(process.cwd(), "src", "server", "public")
 	const staticRoot = fs.existsSync(distPublic) ? distPublic : srcPublic
-	// eslint-disable-next-line no-console
-	console.log(`[dashboard] static root: ${staticRoot}`)
-	// eslint-disable-next-line no-console
-	console.log(`[dashboard] index exists: ${fs.existsSync(path.join(staticRoot, "index.html"))}`)
 	app.use(express.static(staticRoot))
 	app.get(["/", "/index.html"], (_req: Request, res: Response) => {
 		res.sendFile(path.join(staticRoot, "index.html"))
@@ -102,6 +95,9 @@ export function createServer(port: number = 3000, providedBot?: PumpChatBot): Se
 
 	app.get(["/chat", "/chat.html"], (_req: Request, res: Response) => {
 		res.sendFile(path.join(staticRoot, "chat.html"))
+	})
+	app.get(["/guess", "/guess.html"], (_req: Request, res: Response) => {
+		res.sendFile(path.join(staticRoot, "guess.html"))
 	})
 	// Fallback to index for any route
 	app.use((req: Request, res: Response) => {

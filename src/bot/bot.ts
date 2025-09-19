@@ -33,7 +33,6 @@ export class PumpChatBot {
 	}
 
 	public subscribe(handler: (msg: IMessage) => void): () => void {
-		console.log(handler);
 		this.subscribers.add(handler)
 		return () => {
 			this.subscribers.delete(handler)
@@ -101,7 +100,6 @@ export class PumpChatBot {
 	private async onMessage(msg: IMessage): Promise<void> {
 		const client = this.client
 		if (!client) return
-		this.client!!.sendMessage('Dope is the best');
 
 		const now = Date.now()
 		const key = msg.userAddress || msg.username
@@ -212,10 +210,8 @@ export class PumpChatBot {
 		} else {
 
 			// Notify subscribers for live feed
-			console.log(this.subscribers);
 			for (const fn of this.subscribers) {
 				try {
-					console.log('notifying');
 					fn(msg)
 				} catch {
 					console.log('error');
