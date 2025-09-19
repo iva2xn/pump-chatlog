@@ -3,133 +3,69 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Pump Chat - Live Messages</title>
+  <title>Pump Chat</title>
   <style>
     :root {
-      --bg: #0b1020;
-      --card-bg: #0f152a;
-      --card-border: #1f2a44;
-      --text: #e7ecf3;
-      --muted: #a6b0c3;
-      --accent: #7aa2ff;
-      --shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+      --bg: #000000;
+      --fg: #ffffff;
+      --border: #333333;
+      --accent: #ffffff;
     }
-    @media (prefers-color-scheme: light) {
-      :root {
-        --bg: #f6f8fb;
-        --card-bg: #ffffff;
-        --card-border: #e7eaf0;
-        --text: #0c1222;
-        --muted: #5b6780;
-        --accent: #335dff;
-        --shadow: 0 6px 20px rgba(10, 20, 60, 0.06);
-      }
-    }
-
-    html, body { height: 100%; }
     body {
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', 'Liberation Mono', 'Courier New', monospace;
+      background-color: var(--bg);
+      color: var(--fg);
       margin: 0;
-      padding: 0;
-      background: var(--bg);
-      color: var(--text);
+      padding: 1rem;
       display: flex;
       flex-direction: column;
-      min-height: 100dvh;
+      height: 100vh;
     }
-
-    header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--card-border); }
-    header h1 { font-size: 20px; margin: 0; letter-spacing: 0.2px; }
-    .status { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--card-border); color: var(--muted); }
-    .status.ok { color: #16a34a; border-color: rgba(22,163,74,0.35); background: rgba(22,163,74,0.07); }
-    .status.warn { color: #d97706; border-color: rgba(217,119,6,0.35); background: rgba(217,119,6,0.07); }
-
-    .card {
-      border-top: none;
-      border-right: none;
-      border-bottom: none;
-      border-left: none;
-      border-radius: 0;
-      padding: 14px 16px;
-      margin: 0;
-      background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.00)), var(--card-bg);
-      box-shadow: none;
-      display: flex;
-      flex-direction: column;
-      flex: 1;
-      min-height: 0;
-    }
-
-    /* Messages list */
     #messages {
-      overflow: auto;
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-      scrollbar-width: thin;
-      scrollbar-color: var(--card-border) transparent;
-      flex: 1;
-      min-height: 0;
+      flex-grow: 1;
+      overflow-y: auto;
+      border: 1px solid var(--border);
+      padding: 1rem;
+      margin-bottom: 1rem;
     }
-
-    .msg {
-      border: 1px solid var(--card-border);
-      background: rgba(255,255,255,0.02);
-      border-radius: 12px;
-      padding: 10px 12px;
+    .message {
+      margin-bottom: 0.5rem;
     }
-    .meta { display: flex; align-items: baseline; gap: 8px; margin-bottom: 2px; }
-    .when { font-size: 11px; color: var(--muted); }
-    .username { font-weight: 600; color: var(--accent); }
-    .addr { color: var(--muted); font-size: 11px; }
-    .body { white-space: pre-wrap; word-break: break-word; }
+    .meta {
+      color: var(--accent);
+    }
+    .username {
+      font-weight: bold;
+    }
   </style>
   <script>
-    let es
+    let es;
     function formatTime(ts) {
       try { return new Date(ts).toLocaleTimeString() } catch { return '' }
     }
     function attach() {
-      const list = document.getElementById('messages')
-      const statusEl = document.getElementById('status')
-      if (es) es.close()
-      es = new EventSource('/api/stream')
-      es.onopen = () => {
-        if (statusEl) { statusEl.textContent = 'Live'; statusEl.className = 'status ok' }
-      }
+      const list = document.getElementById('messages');
+      if (es) es.close();
+      es = new EventSource('/api/stream');
       es.onmessage = (ev) => {
         try {
-          const msg = JSON.parse(ev.data)
-          const item = document.createElement('div')
-          item.className = 'msg'
-          item.innerHTML = `
-            <div class="meta">
-              <span class="when">${formatTime(msg.timestamp)}</span>
-              <span class="username"></span>              
-            </div>
-            <div class="body"></div>
-          `
-          item.querySelector('.username').textContent = msg.username || ''
-          item.querySelector('.body').textContent = msg.message || ''
-          list.appendChild(item)
-          list.scrollTop = list.scrollHeight
+          const msg = JSON.parse(ev.data);
+          const item = document.createElement('div');
+          item.className = 'message';
+          item.innerHTML = `<span class="meta">[<span class="username">${msg.username}</span>@${formatTime(msg.timestamp)}]</span> <span class="body"></span>`;
+          item.querySelector('.body').textContent = msg.message || '';
+          list.appendChild(item);
+          list.scrollTop = list.scrollHeight;
         } catch {}
-      }
+      };
       es.onerror = () => {
-        if (statusEl) { statusEl.textContent = 'Reconnecting…'; statusEl.className = 'status warn' }
-        setTimeout(() => attach(), 2000)
-      }
+        setTimeout(() => attach(), 2000);
+      };
     }
-    window.addEventListener('load', attach)
+    window.addEventListener('load', attach);
   </script>
-  </head>
+</head>
 <body>
-  <header>
-    <h1>Live Chat</h1>
-    <div id="status" class="status">Connecting…</div>
-  </header>
-  <section class="card" id="messages"></section>
+  <div id="messages"></div>
 </body>
 </html>
-
-

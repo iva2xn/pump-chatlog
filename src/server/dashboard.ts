@@ -6,11 +6,23 @@ import { PumpChatBot } from "../bot/bot"
 import type { Server } from "http"
 import fs from "fs"
 
-export function createServer(port: number = 3000, providedBot?: PumpChatBot): Server {
+export function createServer(port: number = 3000): Server {
 	const app = express()
 	app.use(bodyParser.json())
 
-	let bot: PumpChatBot | null = providedBot || null
+	let bot: PumpChatBot | null = null
+
+	const restartBot = () => {
+		if (bot) {
+			bot.stop()
+			bot = null
+		}
+		const config = loadConfig()
+		if (config.roomId) {
+			bot = new PumpChatBot(config)
+			bot.start()
+		}
+	}
 
 	app.get("/api/config", (req: Request, res: Response) => {
 		res.json(loadConfig())
@@ -18,24 +30,8 @@ export function createServer(port: number = 3000, providedBot?: PumpChatBot): Se
 
 	app.post("/api/config", (req: Request, res: Response) => {
 		const merged = saveConfig(req.body || {})
-		if (bot) bot.updateConfig(merged)
 		res.json(merged)
-	})
-
-	app.post("/api/bot/start", (req: Request, res: Response) => {
-		if (!bot) bot = new PumpChatBot(loadConfig())
-		bot.start()
-		res.json({ ok: true })
-	})
-
-	app.post("/api/bot/stop", (req: Request, res: Response) => {
-		if (bot) bot.stop()
-		res.json({ ok: true })
-	})
-
-	app.get("/api/bot/status", (req: Request, res: Response) => {
-		if (!bot) return res.json({ running: false, connected: false })
-		res.json(bot.getStatus())
+		restartBot()
 	})
 
 	// Server-Sent Events stream for live messages
@@ -59,8 +55,9 @@ export function createServer(port: number = 3000, providedBot?: PumpChatBot): Se
 			res.write(`: ping\n\n`)
 		}, 10000)
 
-		if (!bot) bot = new PumpChatBot(loadConfig())
-		const unsubscribe = bot.subscribe((msg) => {
+		if (!bot) restartBot()
+
+		const unsubscribe = bot!.subscribe((msg) => {
 			try {
 				res.write(`data: ${JSON.stringify({
 					id: msg.id,
@@ -69,17 +66,13 @@ export function createServer(port: number = 3000, providedBot?: PumpChatBot): Se
 					message: msg.message,
 					timestamp: msg.timestamp,
 				})}\n\n`)
-			} catch {
-                console.log('error');
-            }
+			} catch {}
 		})
 
 		req.on("close", () => {
-            console.log('bot closed');
 			clearInterval(heartbeat)
 			unsubscribe()
 			try { res.end() } catch {}
-            console.log('bot ended');
 		})
 	})
 
@@ -88,6 +81,10 @@ export function createServer(port: number = 3000, providedBot?: PumpChatBot): Se
 	const distPublic = path.join(__dirname, "public")
 	const srcPublic = path.resolve(process.cwd(), "src", "server", "public")
 	const staticRoot = fs.existsSync(distPublic) ? distPublic : srcPublic
+	// eslint-disable-next-line no-console
+	console.log(`[dashboard] static root: ${staticRoot}`)
+	// eslint-disable-next-line no-console
+	console.log(`[dashboard] index exists: ${fs.existsSync(path.join(staticRoot, "index.html"))}`)
 	app.use(express.static(staticRoot))
 	app.get(["/", "/index.html"], (_req: Request, res: Response) => {
 		res.sendFile(path.join(staticRoot, "index.html"))
@@ -96,18 +93,16 @@ export function createServer(port: number = 3000, providedBot?: PumpChatBot): Se
 	app.get(["/chat", "/chat.html"], (_req: Request, res: Response) => {
 		res.sendFile(path.join(staticRoot, "chat.html"))
 	})
-	app.get(["/guess", "/guess.html"], (_req: Request, res: Response) => {
-		res.sendFile(path.join(staticRoot, "guess.html"))
-	})
 	// Fallback to index for any route
 	app.use((req: Request, res: Response) => {
 		res.sendFile(path.join(staticRoot, "index.html"))
 	})
+
+	// Start bot on server startup
+	restartBot()
 
 	return app.listen(port, () => {
 		// eslint-disable-next-line no-console
 		console.log(`Dashboard listening on http://localhost:${port}`)
 	})
 }
-
-

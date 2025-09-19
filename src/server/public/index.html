@@ -3,17 +3,56 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Pump Chat Bot Dashboard</title>
+  <title>Pump Chat Viewer</title>
   <style>
-    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; max-width: 900px; margin: 24px auto; padding: 0 16px; }
-    header { display: flex; align-items: center; justify-content: space-between; }
-    .card { border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin: 16px 0; }
-    label { display: block; font-weight: 600; margin-top: 10px; }
-    input, textarea { width: 100%; padding: 8px; border: 1px solid #d1d5db; border-radius: 6px; margin-top: 6px; }
-    button { background: #111827; color: white; border: 0; padding: 10px 14px; border-radius: 6px; cursor: pointer; }
-    button.secondary { background: #6b7280; }
-    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-    .status { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    :root {
+      --bg: #000000;
+      --fg: #ffffff;
+      --border: #333333;
+      --accent: #ffffff;
+    }
+    body {
+      font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', 'Liberation Mono', 'Courier New', monospace;
+      background-color: var(--bg);
+      color: var(--fg);
+      margin: 0;
+      padding: 1rem;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+    }
+    .container {
+      border: 1px solid var(--border);
+      padding: 2rem;
+      width: 100%;
+      max-width: 500px;
+    }
+    h1 {
+      text-align: center;
+      margin-bottom: 2rem;
+    }
+    label {
+      display: block;
+      margin-bottom: 0.5rem;
+    }
+    input {
+      width: 100%;
+      padding: 0.5rem;
+      background-color: var(--bg);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      margin-bottom: 1rem;
+    }
+    button {
+      width: 100%;
+      padding: 0.75rem;
+      background-color: var(--fg);
+      color: var(--bg);
+      border: none;
+      cursor: pointer;
+      font-weight: bold;
+    }
   </style>
   <script>
     async function fetchJSON(url, options) {
@@ -24,97 +63,31 @@
     async function load() {
       const cfg = await fetchJSON('/api/config')
       document.getElementById('roomId').value = cfg.roomId || ''
-      document.getElementById('username').value = cfg.username || ''
       document.getElementById('messageHistoryLimit').value = cfg.messageHistoryLimit ?? 100
-      document.getElementById('token').value = cfg.token || ''
-      document.getElementById('sendIntervalMs').value = cfg.sendIntervalMs ?? 60000
-      document.getElementById('blacklist').value = (cfg.blacklist || []).join(', ')
-      document.getElementById('cooldownSeconds').value = cfg.cooldownSeconds ?? 5
-      await refreshStatus()
     }
-    async function save() {
+    async function connect() {
       const payload = {
         roomId: document.getElementById('roomId').value.trim(),
-        username: document.getElementById('username').value.trim() || null,
         messageHistoryLimit: Number(document.getElementById('messageHistoryLimit').value) || 100,
-        token: document.getElementById('token').value.trim() || null,
-        sendIntervalMs: Number(document.getElementById('sendIntervalMs').value) || 60000,
-        blacklist: document.getElementById('blacklist').value.split(',').map(s => s.trim()).filter(Boolean),
-        cooldownSeconds: Number(document.getElementById('cooldownSeconds').value) || 5,
       }
-      const cfg = await fetchJSON('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
-      alert('Saved!')
-      return cfg
-    }
-    async function startBot() {
-      await fetchJSON('/api/bot/start', { method: 'POST' })
-      await refreshStatus()
-    }
-    async function stopBot() {
-      await fetchJSON('/api/bot/stop', { method: 'POST' })
-      await refreshStatus()
-    }
-    async function refreshStatus() {
-      const s = await fetchJSON('/api/bot/status')
-      document.getElementById('status').textContent = JSON.stringify(s, null, 2)
+      await fetchJSON('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+      window.location.href = '/chat.html'
     }
     window.addEventListener('load', load)
   </script>
   </head>
 <body>
-  <header>
-    <h1>Pump Chat Bot Dashboard</h1>
+  <div class="container">
+    <h1>Pump Chat Viewer</h1>
     <div>
-      <button onclick="startBot()">Start</button>
-      <button class="secondary" onclick="stopBot()">Stop</button>
-    </div>
-  </header>
-  <section class="card">
-    <h2>Configuration</h2>
-    <div class="row">
-      <div>
-        <label>Room ID</label>
-        <input id="roomId" placeholder="TOKEN_ADDRESS"/>
-      </div>
-      <div>
-        <label>Username</label>
-        <input id="username" placeholder="Display name"/>
-      </div>
-    </div>
-    <div class="row">
-      <div>
-        <label>History Limit</label>
-        <input id="messageHistoryLimit" type="number" min="1" />
-      </div>
-      <div>
-        <label>Cooldown Seconds</label>
-        <input id="cooldownSeconds" type="number" min="0" />
-      </div>
-    </div>
-    <div class="row">
-      <div>
-        <label>Send Interval (ms)</label>
-        <input id="sendIntervalMs" type="number" min="0" />
-      </div>
-      <div>
-        <label>Token (JWT)</label>
-        <input id="token" type="password"/>
-      </div>
+      <label for="roomId">Room ID</label>
+      <input id="roomId" placeholder="TOKEN_ADDRESS"/>
     </div>
     <div>
-      <label>Blacklist (comma-separated)</label>
-      <textarea id="blacklist" rows="3" placeholder="word1, word2"></textarea>
+      <label for="messageHistoryLimit">History Limit</label>
+      <input id="messageHistoryLimit" type="number" min="1" />
     </div>
-    <div style="margin-top:12px">
-      <button onclick="save()">Save</button>
-    </div>
-  </section>
-  <section class="card">
-    <h2>Status</h2>
-    <pre id="status" class="status">{}</pre>
-    <div><button class="secondary" onclick="refreshStatus()">Refresh</button></div>
-  </section>
+    <button onclick="connect()">Connect</button>
+  </div>
 </body>
 </html>
-
-
