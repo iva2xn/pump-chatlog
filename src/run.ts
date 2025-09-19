@@ -1,4 +1,6 @@
-import { PumpChatClient } from "./index"
+import { createServer } from "./server/dashboard"
+import { loadConfig } from "./config/store"
+import { PumpChatBot } from "./bot/bot"
 
 type CliOptions = {
     roomId: string | null
@@ -122,107 +124,38 @@ async function main() {
         process.argv.slice(2)
     )
 
-    if (!roomId) {
-        console.error("Error: --room <TOKEN_ADDRESS> is required.")
-        printUsage()
-        process.exit(1)
+    const initial = loadConfig()
+    const merged = {
+        ...initial,
+        roomId: roomId || initial.roomId,
+        username: username || initial.username,
+        messageHistoryLimit: messageHistoryLimit ?? initial.messageHistoryLimit,
+        token: token || initial.token,
+        sendIntervalMs: sendIntervalMs ?? initial.sendIntervalMs,
+        blacklist: blacklist ?? initial.blacklist,
+        cooldownSeconds: cooldownSeconds ?? initial.cooldownSeconds,
     }
 
-    const client = new PumpChatClient({
-        roomId,
-        username: username || undefined,
-        messageHistoryLimit: messageHistoryLimit || undefined,
-        token: token || undefined,
-    })
-
-    client.on("connected", () => {
-        console.log(`Connected to room ${roomId}`)
-    })
-
-    // Maintain per-user cooldown since the last allowed message
-    type Recent = { lastAllowedAt: number; messages: { id: string; at: number }[] }
-    const recentByUser: Map<string, Recent> = new Map()
-    const cooldownMs = cooldownSeconds != null ? Math.max(0, Math.floor(cooldownSeconds * 1000)) : 5000
-    const blacklistWords = (blacklist || []).map((w) => w.toLowerCase())
-
-    const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-    const containsExactBlacklistedWord = (text: string): boolean => {
-        if (!text || blacklistWords.length === 0) return false
-        for (const word of blacklistWords) {
-            const re = new RegExp(`\\b${escapeRegExp(word)}\\b`, "i")
-            if (re.test(text)) return true
-        }
-        return false
+    const bot = new PumpChatBot(merged)
+    if (merged.roomId) {
+        bot.start()
+    } else {
+        console.error("No roomId configured. Use the dashboard to set one.")
     }
 
-    client.on("message", async (msg) => {
-        const now = Date.now()
-        const key = msg.userAddress || msg.username
-        if (!key) return
-
-        // Blacklist check: delete immediately on exact word match
-        if (containsExactBlacklistedWord(String(msg.message || ""))) {
-            await client.deleteMessage(msg)
-            return
-        }
-
-        const current: Recent = recentByUser.get(key) || { lastAllowedAt: 0, messages: [] }
-
-        // Prune entries older than cooldown window (only if cooldown active)
-        if (cooldownMs > 0) {
-            current.messages = current.messages.filter((m) => now - m.at <= cooldownMs)
-        }
-
-        // Time since last allowed message for this user
-        const delta = current.lastAllowedAt ? now - current.lastAllowedAt : Number.POSITIVE_INFINITY
-        // Record this message id and timestamp (for optional future use/inspection)
-        current.messages.push({ id: msg.id, at: now })
-
-        if (cooldownMs > 0 && delta <= cooldownMs) {
-            // Within cooldown: delete the message
-            await client.deleteMessage(msg)
-            recentByUser.set(key, current)
-        } else {
-            // Outside cooldown: allow and update lastAllowedAt
-            if (cooldownMs > 0) current.lastAllowedAt = now
-            recentByUser.set(key, current)
-        }
-    })
-
-    client.on("userLeft", (payload) => {
-        console.log(`User left: ${JSON.stringify(payload)}`)
-    })
-
-    client.on("serverError", (err) => {
-        console.error(`Server error: ${JSON.stringify(err)}`)
-    })
-
-    client.on("error", (err) => {
-        console.error(`Error: ${err}`)
-    })
-
-    client.on("disconnected", () => {
-        console.log("Disconnected from chat")
-    })
-
-    client.on("maxReconnectAttemptsReached", () => {
-        console.error("Max reconnection attempts reached. Exiting.")
-        process.exit(1)
-    })
+    const server = createServer(3000, bot)
 
     // Graceful shutdown
     const shutdown = () => {
         try {
-            client.disconnect()
+            bot.stop()
+            server.close()
         } finally {
-            // Give a brief moment for clean close frames
             setTimeout(() => process.exit(0), 200)
         }
     }
     process.on("SIGINT", shutdown)
     process.on("SIGTERM", shutdown)
-
-    client.connect()
 }
 
 main().catch((err) => {
