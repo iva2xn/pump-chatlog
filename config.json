@@ -1,4 +1,6 @@
 {
-  "roomId": "2GPFXoPMSVD2PmJMeCrTkf3rNogXRfEDB3S7HeCfpump",
-  "messageHistoryLimit": 100
+  "roomId": "GN7boYFKG1296e1aoTq8YHrjge13udfdnV6K4b7Mpump",
+  "messageHistoryLimit": 100,
+  "commandPrefix": "!",
+  "lastFedWord": "green"
 }

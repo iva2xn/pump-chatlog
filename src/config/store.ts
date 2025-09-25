@@ -7,6 +7,7 @@ const configPath = path.resolve(process.cwd(), "config.json")
 const defaultConfig: BotConfig = {
 	roomId: "",
 	messageHistoryLimit: 100,
+	commandPrefix: "!",
 }
 
 export function loadConfig(): BotConfig {

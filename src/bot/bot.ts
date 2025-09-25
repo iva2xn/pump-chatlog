@@ -1,5 +1,6 @@
 import { PumpChatClient, IMessage } from "../index"
 import { BotConfig, BotStatus } from "./types"
+import { saveConfig } from "../config/store"
 
 export class PumpChatBot {
 	private config: BotConfig
@@ -73,6 +74,21 @@ export class PumpChatBot {
 				fn(msg)
 			} catch {
 				// ignore
+			}
+		}
+
+		const prefix = this.config.commandPrefix || "!"
+		if (msg.message.startsWith(prefix)) {
+			const args = msg.message.slice(prefix.length).trim().split(/ +/g)
+			const command = args.shift()?.toLowerCase()
+
+			if (command === "feed") {
+				const whatToFeed = args.shift()
+				if (whatToFeed) {
+					this.client?.sendMessage(`${whatToFeed}`)
+					this.config.lastFedWord = whatToFeed
+					saveConfig(this.config)
+				}
 			}
 		}
 	}

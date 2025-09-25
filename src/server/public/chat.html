@@ -37,6 +37,11 @@
     .username {
       font-weight: bold;
     }
+    .bordered-word {
+      border: 1px solid var(--fg);
+      padding: 0.2rem 0.4rem;
+      display: inline-block;
+    }
   </style>
   <script>
     let es;
@@ -52,11 +57,32 @@
           const msg = JSON.parse(ev.data);
           const item = document.createElement('div');
           item.className = 'message';
-          item.innerHTML = `<span class="meta">[<span class="username">${msg.username}</span>@${formatTime(msg.timestamp)}]</span> <span class="body"></span>`;
-          item.querySelector('.body').textContent = msg.message || '';
+
+          const feedCommandPrefix = '!feed ';
+          const messageContent = msg.message || '';
+
+          if (messageContent.toLowerCase().startsWith(feedCommandPrefix)) {
+            const parts = messageContent.split(' ');
+            const command = parts.shift(); // !feed
+            const wordToBorder = parts.shift(); // The word after !feed
+
+            if (wordToBorder) {
+              // Reconstruct the message with the bordered word
+              const remainingMessage = parts.join(' ');
+              item.innerHTML = `<span class="meta">[<span class="username">${msg.username}</span>@${formatTime(msg.timestamp)}]</span> <span class="body">${command} <span class="bordered-word">${wordToBorder}</span> ${remainingMessage}</span>`;
+            } else {
+              // If no word to border, render as normal message
+              item.innerHTML = `<span class="meta">[<span class="username">${msg.username}</span>@${formatTime(msg.timestamp)}]</span> <span class="body">${messageContent}</span>`;
+            }
+          } else {
+            // Render as normal message
+            item.innerHTML = `<span class="meta">[<span class="username">${msg.username}</span>@${formatTime(msg.timestamp)}]</span> <span class="body">${messageContent}</span>`;
+          }
           list.appendChild(item);
           list.scrollTop = list.scrollHeight;
-        } catch {}
+        } catch (e) {
+          console.error('Error processing message:', e);
+        }
       };
       es.onerror = () => {
         setTimeout(() => attach(), 2000);
